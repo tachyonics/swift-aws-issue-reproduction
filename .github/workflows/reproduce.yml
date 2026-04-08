@@ -1,0 +1,54 @@
+name: Reproduce CRT TLS crash
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  # Allow manual triggering to re-run without pushing.
+  workflow_dispatch:
+
+jobs:
+  # Run the same tests multiple times to demonstrate non-deterministic failure.
+  # The crash reproduces approximately 30-50% of the time per run.
+  reproduce:
+    name: ${{ matrix.os }} / Swift ${{ matrix.swift-version }} / attempt ${{ matrix.attempt }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        swift-version: ["6.2.4"]
+        # Multiple attempts to increase the chance of triggering the
+        # non-deterministic crash in a single CI run.
+        attempt: [1, 2, 3]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Install Swift directly from swift.org tarball — no third-party
+      # action involved, to rule out action-specific packaging issues.
+      - name: Install Swift
+        run: |
+          UBUNTU_VER="${{ matrix.os }}"
+          UBUNTU_VER="${UBUNTU_VER#ubuntu-}"
+          UBUNTU_NO_DOT="${UBUNTU_VER//./}"
+          SWIFT_DIR="swift-${{ matrix.swift-version }}-RELEASE-ubuntu${UBUNTU_VER}"
+          curl -sL "https://download.swift.org/swift-${{ matrix.swift-version }}-release/ubuntu${UBUNTU_NO_DOT}/swift-${{ matrix.swift-version }}-RELEASE/${SWIFT_DIR}.tar.gz" -o swift.tar.gz
+          sudo tar -xzf swift.tar.gz -C /opt/
+          rm swift.tar.gz
+          echo "/opt/${SWIFT_DIR}/usr/bin" >> $GITHUB_PATH
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
+      - name: Swift version
+        run: swift --version
+
+      - name: System environment
+        run: |
+          echo "=== OpenSSL ===" && openssl version
+          echo "=== CA certs ===" && ls -la /etc/ssl/certs/ca-certificates.crt
+          echo "=== libssl/libcrypto ===" && ldconfig -p | grep -E "libssl|libcrypto" | head -5
+
+      - name: Run tests
+        run: swift test
